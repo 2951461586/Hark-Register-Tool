@@ -62,7 +62,9 @@ def worker_domains() -> list:
     url = f"{config.WORKER_BASE.rstrip('/')}/api/domains"
     s = requests.Session()
     s.trust_env = False
-    r = s.get(url, headers={"User-Agent": config.USER_AGENT, "Accept": "application/json"}, timeout=20)
+    r = s.get(
+        url, headers={"User-Agent": config.USER_AGENT, "Accept": "application/json"}, timeout=20
+    )
     data = r.json()
     domains = list(data.get("domains") or [])
     if not domains:

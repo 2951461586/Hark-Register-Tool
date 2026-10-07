@@ -53,16 +53,20 @@ LOCAL_TOP_LEVEL = {
     # tools/ 的脚本靠这两个副作用导入把仓库根与 tools/ 加进 sys.path。
     "_bootstrap",
     "_path",
-    # tools/ 各子目录里的脚本，彼此之间与测试都直接按模块名 import。
-    "cf_service_doctor",
-    "probe_domains",
-    "probe_magic_link",
-    "probe_register_limit",
-    "probe_slots",
-    "recover_accounts",
-    "repair_stages",
-    "verify_accounts",
 }
+
+
+def _tool_module_names() -> set:
+    """`tools/**/*.py` 的模块名（不含 `.py`）。
+
+    🔴 为什么从**文件系统**推，而不是写一份名单：早前这里是硬编码的一串工具名，
+      而“新加一个工具就得记得回来补一行”是必然会漏的 —— 实测：加完
+      `prune_ledger.py` 后这个闸门当场报 `prune_ledger` 是第三方包。
+      那种失败还算好（它红得及时），但它把人引向“去补名单”而不是“去检查依赖”。
+      从目录推就不会漂：**新增工具自动被认作本地**，
+      而闸门的真正职责（拦住真正的第三方包）一点没减弱。
+    """
+    return {p.stem for p in (ROOT / "tools").rglob("*.py")}
 
 # 这些模块是"便宜层"：不碰网络、只依赖 stdlib + 本仓库。
 # 🔴 为什么单独钉住它们：`tests/test_report.py` / `test_ledger_merge.py` 只 import
@@ -94,12 +98,11 @@ def _top_level_imports(path: Path) -> set:
 
 
 def _third_party(names: set) -> set:
+    local = LOCAL_TOP_LEVEL | _tool_module_names()
     return {
         n
         for n in names
-        if n not in sys.stdlib_module_names
-        and n not in LOCAL_TOP_LEVEL
-        and not n.startswith("_")
+        if n not in sys.stdlib_module_names and n not in local and not n.startswith("_")
     }
 
 
@@ -141,8 +144,7 @@ def test_requirements_matches_the_allowlist():
     ]
     names = {ln.split(">=")[0].split("==")[0].strip().lower() for ln in lines}
     assert names == ALLOWED_RUNTIME, (
-        f"requirements.txt 与 ALLOWED_RUNTIME 不一致：{sorted(names)} vs "
-        f"{sorted(ALLOWED_RUNTIME)}"
+        f"requirements.txt 与 ALLOWED_RUNTIME 不一致：{sorted(names)} vs {sorted(ALLOWED_RUNTIME)}"
     )
 
 

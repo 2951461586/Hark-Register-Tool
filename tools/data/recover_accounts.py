@@ -69,13 +69,27 @@ def needs_recovery(rec: dict) -> bool:
     return str(stages.get("activate") or "").startswith(STAGE_ACTIVATE_OK)
 
 
-def recover_one(rec: dict, pool: SlotPool, *, dry: bool = False) -> tuple[dict, str]:
+def recover_one(
+    rec: dict,
+    pool: SlotPool,
+    *,
+    dry: bool = False,
+    client_factory=None,
+    mail_factory=None,
+) -> tuple[dict, str]:
     """补一个账号。返回 `(新的记录, 结论文本)`；**不改台账**。
 
     ⚠ 返回的是**二元组**而不是单个 dict —— 结论要单独回给人看，
-      而“补成了没有”不能靠猜（看 `status` 会把“本来就没戏”与“刚补完”
+      而“补成了没有”不能靠猜（看 `status` 会把“本来就没戏”与“刚补完”）
       混成同一个值）。
+
+    `client_factory` / `mail_factory` 是**注入点**（默认造真客户端）：
+      与 `pipeline.run_batch` 同一个理由 —— 让“补登”的编排、两条分支、
+      写台账的形状都能**离线**测。这里尤其重要：本工具会**写台账**，
+      而台账是账号的唯一副本。
     """
+    make_client = client_factory or (lambda proxy=None: HarkClient(proxy=proxy))
+    make_mail = mail_factory or (lambda: TempMailClient())
     email = rec["email"]
     out = copy.deepcopy(rec)
     note = ""
@@ -90,7 +104,7 @@ def recover_one(rec: dict, pool: SlotPool, *, dry: bool = False) -> tuple[dict, 
     except SlotPoolEmpty as ex:
         return out, f"✗ 借不到出口：{ex}"
     try:
-        client = HarkClient(proxy=slot)
+        client = make_client(slot)
         # ① 账号还在不在 —— 一次便宜的只读查询，把"号不存在"与"密码不对"分开。
         try:
             disc = client.discover(email)
@@ -101,7 +115,7 @@ def recover_one(rec: dict, pool: SlotPool, *, dry: bool = False) -> tuple[dict, 
 
         # ② 拿到一条可用会话。无密码的先补设一个。
         if not rec.get("password"):
-            mail = TempMailClient()
+            mail = make_mail()
             sent_at = now_ms()
             try:
                 client.request_magic_link(email)
@@ -128,7 +142,7 @@ def recover_one(rec: dict, pool: SlotPool, *, dry: bool = False) -> tuple[dict, 
             out["stages"]["password"] = "ok(补设)"
             note = "（补设了密码）"
             # 设密码用的那条会话不是登录会话，下面照常重新登录 —— 那才是"能用"的证明。
-            client = HarkClient(proxy=slot)
+            client = make_client(slot)
 
         # ③ 密码登录（过按出口的限速闸门）。
         waited = pipeline.login_limiter(slot).acquire()

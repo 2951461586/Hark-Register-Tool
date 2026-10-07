@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-"""测出**注册侧 429** 是按什么键限的 —— 这是"能不能提高注册吞吐"的唯一依据。
+"""测出**注册侧 429** 是按什么键限的、额度多大、窗口多长。
 
 为什么需要它
 ============
 2026-10-08 的 10 批实测里，批次 6 出现 3 个注册侧 429，而它们**同一瞬间命中了
-3 个不同出口**（7903/7905/7904）。⇒ 它**不是 per-IP** 的。
+3 个不同出口**（7903/7905/7904）。当时据此判定“不是 per-IP”，并写进了 README ——
+🔴 **那个结论是错的**，本工具的对照实验推翻了它：
 
-这一条推翻了一个很自然的假设（"加出口就能提高注册吞吐"），但**没有**回答
-"那它按什么键"。在测出这个之前，任何关于注册并发/限速的调参都是猜。
+    阶段 A：同出口第 6 次 `magic-link` → 429（discovery / signup-age 一直 200）
+    阶段 B：B1 换收件域名仍 429   ⇒ 不是按域名键
+            B2 **换出口立刻通过** ⇒ **是按 IP 键**
+            B3 只打只读端点通过   ⇒ 只限写端点 `magic-link`
 
-本工具做两段：
-  阶段 A —— **找形状**：连续打注册申请，看哪个端点先 429、第几次、什么窗口。
-  阶段 B —— **定性**：一出现 429 就立刻做对照（窗口可能只有几分钟）：
-              B1 换收件域名（同出口同端点）  → 通过 ⇒ 按**域名**键
-              B2 换出口（同域名同端点）      → 通过 ⇒ 按 **IP** 键（与批次 6 矛盾，复验）
-              B3 只打只读的 discovery        → 429  ⇒ **读**端点也限；通过 ⇒ 只限写
-              B4 同一个地址连打 magic-link   → 与 B1 合起来区分"按地址"还是"按域名"
+**当时推错的原因**：那 3 个出口各自在前 60s 里都积了 ~5 次（每批 1 次 × 5 批），
+所以它们**同时**触顶。**同时性 ≠ 同一个键** —— 它只说明它们的**历史相同**。
+一个“同时发生”的观测区分不了“共享一个计数器”与“各自独立但节奇一致”；
+要定性必须**只变一个变量**（B1 变域名、B2 变出口）。
+
+已知：额度 ≈ **5 次/分钟/IP**，限 `magic-link`，按客户端 IP。
+本工具另外提供 `--measure-window` 去测**窗口长度**（之前只观察到 ≤43s 就恢复）。
 
 🔴 安全边界（为什么它不会把账号池搞脏）
 ------------------------------------
@@ -28,8 +31,8 @@
 
 用法
 ====
-    python tools/probes/probe_register_limit.py                  # 默认最多 40 次注册申请
-    python tools/probes/probe_register_limit.py --max-calls 80
+    python tools/probes/probe_register_limit.py                  # 阶段 A+B（默认最多 40 轮）
+    python tools/probes/probe_register_limit.py --measure-window # 测窗口长度
     python tools/probes/probe_register_limit.py --json state/reg_limit.json
 
 退出码：0 = 跑完并给出结论；1 = 没触发 429（上限内没测到）；2 = 配置不全
@@ -79,7 +82,9 @@ def _one_round(
         t0 = time.time()
         try:
             fn(client, addr, birthday)
-            out.append({"call": name, "status": 200, "ms": int((time.time() - t0) * 1000), "error": ""})
+            out.append(
+                {"call": name, "status": 200, "ms": int((time.time() - t0) * 1000), "error": ""}
+            )
         except HarkQuota as ex:
             out.append(
                 {
@@ -105,9 +110,86 @@ def _one_round(
     return out
 
 
+def _trip_quota(client, mail, domain, birthday, *, cap_s: float = 120.0, log=print):
+    """打到 429 为止。返回 `(命中轮数, 命中信息)`；打不出来返回 `(n, None)`。"""
+    t0 = time.time()
+    n = 0
+    while time.time() - t0 < cap_s:
+        n += 1
+        r = _one_round(client, mail, domain, birthday)
+        hit = next((c for c in r if c.get("quota")), None)
+        if hit:
+            return n, hit
+    return n, None
+
+
+def measure_window(
+    client, mail, domain: str, birthday: str, *, poll_s: float, cap_s: float, log=print
+) -> dict:
+    """测**窗口长度**：先打到 429，然后定时探一次直到通过。
+
+    🔴 为什么这么测：突发的几个成功请求几乎同时（t≈0），所以“窗口滑出”的时刻
+      ≈ “恢复通过”的时刻。轮询粒度就是这次测量的精度。
+
+    ⚠ **一个没有完全排除的可能**：被 429 拒掉的那次尝试**是否也计入窗口**，
+      我们不知道。如果计入，那每个失败的探测都会把窗口往后推，
+      于是测出的值是一个**上界**。所以这里跑第二段**对照**：
+      再打到 429，等 `测得值 + 5s`，只探一次 ——
+      通过则与第一段自洽；仍 429 则说明失败探测确实会推窗口（真值更大）。
+    """
+    log("  第一段：打到 429 …")
+    trips, hit = _trip_quota(client, mail, domain, birthday, cap_s=cap_s, log=log)
+    if hit is None:
+        log(f"  ✗ {trips} 轮内没打到 429，无法测窗口")
+        return {"tripped": False, "trips": trips}
+    log(f"  🔴 第 {trips} 轮命中（{hit['call']}）—— 开始按 {poll_s:.0f}s 粒度探测恢复")
+    t_trip = time.time()
+    probes = []
+    recovered = None
+    while time.time() - t_trip < cap_s:
+        time.sleep(poll_s)
+        r = _one_round(client, mail, domain, birthday)
+        ok = not any(c.get("quota") for c in r)
+        elapsed = round(time.time() - t_trip, 1)
+        probes.append({"t": elapsed, "ok": ok})
+        log(f"    t+{elapsed:>5.1f}s  {'通过 ✅' if ok else '仍 429'}")
+        if ok:
+            recovered = elapsed
+            break
+
+    control = None
+    if recovered is not None:
+        log(f"\n  第二段（对照）：再打到 429，然后等 {recovered + 5:.0f}s 只探一次 …")
+        trips2, hit2 = _trip_quota(client, mail, domain, birthday, cap_s=cap_s, log=log)
+        if hit2 is None:
+            control = {"tripped": False}
+            log("  （对照段没打到 429，跳过）")
+        else:
+            wait = recovered + 5.0
+            log(f"  等 {wait:.0f}s …")
+            time.sleep(wait)
+            r = _one_round(client, mail, domain, birthday)
+            ok = not any(c.get("quota") for c in r)
+            control = {"tripped": True, "waited_s": wait, "passed": ok}
+            log(f"  {'通过 ✅ 与第一段自洽' if ok else '仍 429 ⇒ 失败探测也会推窗口，真值 > 第一段'}")
+
+    return {
+        "tripped": True,
+        "trips_to_trip": trips,
+        "recovered_after_s": recovered,
+        "poll_s": poll_s,
+        "probes": probes,
+        "control": control,
+    }
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="测注册侧 429 的键")
     ap.add_argument("--max-calls", type=int, default=40, help="最多几轮注册申请（默认 40）")
+    ap.add_argument(
+        "--measure-window", action="store_true", help="改测**窗口长度**（不再做 B1/B2/B3 定性）"
+    )
+    ap.add_argument("--poll", type=float, default=10.0, help="测窗口时的探测粒度秒数（默认 10）")
     ap.add_argument("--interval", type=float, default=0.0, help="轮之间的间隔秒数（默认 0 = 尽快打）")
     ap.add_argument("--domain", default=None, help="主域名（默认 HR_WORKER_DOMAIN）")
     ap.add_argument("--alt-domain", default=None, help="对照用的另一个域名（默认问 Worker 要）")
@@ -127,6 +209,31 @@ def main(argv=None) -> int:
 
     mail = TempMailClient()
     client = HarkClient(proxy=pool.acquire() if pool else None)
+
+    if args.measure_window:
+        win = measure_window(
+            client, mail, domain, config.BIRTHDAY, poll_s=args.poll, cap_s=600.0, log=print
+        )
+        report = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "mode": "measure_window",
+            "domain": domain,
+            "exits": [redact.redact_url(s) for s in slots],
+            "window": win,
+        }
+        if args.json:
+            from pathlib import Path
+
+            p = Path(args.json)
+            if not p.is_absolute():
+                p = ROOT / p
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"\n报告已写入：{p}")
+        if pool:
+            pool.release(client.session.proxies.get("https"))
+        return 0 if win.get("recovered_after_s") else 1
+
     rounds = []
     first_quota = None
 
@@ -165,11 +272,16 @@ def main(argv=None) -> int:
 
                 s = requests.Session()
                 s.trust_env = False
-                got = s.get(
-                    f"{config.WORKER_BASE.rstrip('/')}/api/domains",
-                    headers={"User-Agent": config.USER_AGENT},
-                    timeout=20,
-                ).json().get("domains") or []
+                got = (
+                    s.get(
+                        f"{config.WORKER_BASE.rstrip('/')}/api/domains",
+                        headers={"User-Agent": config.USER_AGENT},
+                        timeout=20,
+                    )
+                    .json()
+                    .get("domains")
+                    or []
+                )
                 alt = next((d for d in got if d != domain), "")
             except Exception:  # noqa: BLE001
                 alt = ""
@@ -185,15 +297,26 @@ def main(argv=None) -> int:
         b1 = probes["B1_other_domain"].get("quota")
 
         # B2 换出口（同域名）
+        #
+        # 🔴 `cur`（本批用的出口）必须在**分支外**取：B3 也要用它。
+        #    早前它在 `if` 里赋值，于是没配池子（或只有 1 个出口）时
+        #    B3 直接 `UnboundLocalError` —— 而那条路径恰恰是**最常用**的
+        #    （单出口跑探测）。这个 bug 是 `tests/test_tools_io.py` 抓到的：
+        #    它把 `_one_round` 换掉、不给池子，于是走到了那条分支。
+        cur = client.session.proxies.get("https")
         if pool and len(pool) > 1:
-            cur = client.session.proxies.get("https")
             other = pool.acquire()
             c2 = HarkClient(proxy=other)
             r = _one_round(c2, mail, domain, bd)
             hit = next((c for c in r if c.get("quota")), None)
             probes["B2_other_exit"] = {"slot": redact.redact_url(other or ""), "quota": bool(hit)}
-            print(f"  B2 换出口 {redact.redact_url(other or '')}（同域名）: {'仍 429' if hit else '**通过**'}")
+            print(
+                f"  B2 换出口 {redact.redact_url(other or '')}（同域名）: {'仍 429' if hit else '**通过**'}"
+            )
             pool.release(other)
+        else:
+            probes["B2_other_exit"] = {"slot": "", "quota": None}
+            print("  B2 换出口：池子里不到 2 个出口，跳过（这条对照测不了）")
 
         # B3 只打只读端点
         c3 = HarkClient(proxy=cur)
