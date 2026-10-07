@@ -101,11 +101,11 @@ def test_has_app_access_false_is_flagged():
 
 def test_email_is_redacted_but_domain_kept():
     out = render(
-        [make_rec("oai-1234567890abcdef@your-mail-domain")],
+        [make_rec("oai-1234567890abcdef@example.com")],
         redact_email=lambda s: "oai…@" + s.split("@")[-1],
     )
     assert "oai-1234567890abcdef" not in out
-    assert "your-mail-domain" in out
+    assert "example.com" in out
 
 
 def test_written_path_is_relativised():

@@ -33,9 +33,15 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # ⚠ 钉 commit SHA，不用可变的 `@v4` 主版本标签：
+      #    主版本标签会被上游**移动**，于是“同一次提交的 CI”在不同日子跑的
+      #    其实是不同的 action 代码 —— 那是供应链风险，也是“无法复现的绿”。
+      #    下面是 v4 的当前指向（2026-10-08 取自 GitHub API）。
+      #    升级：`git ls-remote https://github.com/actions/checkout refs/tags/v4`
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-python@v5
+      # 同上，钉 SHA。升级：`git ls-remote https://github.com/actions/setup-python refs/tags/v5`
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.11"
 
@@ -53,9 +59,15 @@ jobs:
       matrix:
         python-version: ["3.11", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      # ⚠ 钉 commit SHA，不用可变的 `@v4` 主版本标签：
+      #    主版本标签会被上游**移动**，于是“同一次提交的 CI”在不同日子跑的
+      #    其实是不同的 action 代码 —— 那是供应链风险，也是“无法复现的绿”。
+      #    下面是 v4 的当前指向（2026-10-08 取自 GitHub API）。
+      #    升级：`git ls-remote https://github.com/actions/checkout refs/tags/v4`
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-python@v5
+      # 同上，钉 SHA。升级：`git ls-remote https://github.com/actions/setup-python refs/tags/v5`
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -78,9 +90,15 @@ jobs:
   hygiene:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # ⚠ 钉 commit SHA，不用可变的 `@v4` 主版本标签：
+      #    主版本标签会被上游**移动**，于是“同一次提交的 CI”在不同日子跑的
+      #    其实是不同的 action 代码 —— 那是供应链风险，也是“无法复现的绿”。
+      #    下面是 v4 的当前指向（2026-10-08 取自 GitHub API）。
+      #    升级：`git ls-remote https://github.com/actions/checkout refs/tags/v4`
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-python@v5
+      # 同上，钉 SHA。升级：`git ls-remote https://github.com/actions/setup-python refs/tags/v5`
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.11"
 

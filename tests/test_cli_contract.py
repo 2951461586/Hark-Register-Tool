@@ -3,7 +3,7 @@
 为什么需要它（这条用例是被一次误报逼出来的）
 ------------------------------------------
 静态分析器在这台机器上会把 `run.py` 的 `from src import report` 解析到
-**另一个项目**的 `src/report.py`（`F:/epsoft/Cyber/` 下有 3 个兄弟项目都用了
+**另一个项目**的 `src/report.py`（本仓库的父目录下有 3 个兄弟项目都用了
 包名 `src`：Hark / Intern / FiimeOPC）。于是它稳定地报：
 
     run.py:241  No parameter named "slot_pool"

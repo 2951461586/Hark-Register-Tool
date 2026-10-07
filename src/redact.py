@@ -43,7 +43,7 @@ def redact(raw: str, keep: int = 0) -> str:
 
 
 def redact_email(address: str) -> str:
-    """邮箱打码：`oai-7194c5a4de76471d@your-mail-domain` → `oai-…@your-mail-domain`。
+    """邮箱打码：`oai-1234567890abcdef@example.com` → `oai…@example.com`。
 
     ⚠ 与 `redact()` 不同，这里**保留域名**：域名是"用了哪个邮箱源"这个事实，
       排查时需要它；而本地部分才是与某个具体账号绑定的标识。

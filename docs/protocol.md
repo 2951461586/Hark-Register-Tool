@@ -113,7 +113,7 @@ cookie 的 `Domain=hark.com`（**不带前导点**）⇒ 两个 host 共享会�
 
 ### 域名门
 
-**没有**。`your-mail-domain`（自有域名）直接过。这一条值得单独写出来，因为
+**没有**。自有域名直接过。这一条值得单独写出来，因为
 Intern-Register-Tool 那边吃过 `A0232` 域名门的亏（换邮箱源、可插拔邮箱源
 那一整套抽象就是为它做的）。**hark 不需要那套抽象**，所以本项目只有
 一个邮箱源。
@@ -251,7 +251,7 @@ hark 特有的三点：
 #  2  discovery=200 signup-age=200 magic-link=200
 #  3  discovery=200 signup-age=200 magic-link=429      ← 同出口第 6 次（含前一次探测的 3 次）
 
-B1 换收件域名 @edu.your-mail-domain（同出口）: 仍 429      ← 不是按域名键
+B1 换收件域名 @<另一个自有域名>（同出口）: 仍 429      ← 不是按域名键
 B2 换出口 7902（同域名）:                 **通过**    ← 是按 IP 键
 B3 只打 discovery（只读）:                通过        ← 限的是写端点 magic-link
 ```
@@ -286,9 +286,9 @@ B3 只打 discovery（只读）:                通过        ← 限的是写�
 而且它现在**真的**在拦：有一次探测刚把某个出口打到 429，紧接着的批里那个
 出口上的账号在闸门里等了 ~7s（**没有**报 429）—— 那是“等”换掉了“失败”。
 
-### 🔴 域名门：`another-domain` 收不到 hark 的信（2026-10-08）
+### 🔴 域名门：自有域名里有的收不到 hark 的信（2026-10-08）
 
-`another-domain` 在 Worker 的 `DOMAINS` 里、邮箱也能建出来，但 hark 的 magic link
+有一个自有域名在 Worker 的 `DOMAINS` 里、邮箱也能建出来，但 hark 的 magic link
 **从来没到**。现象是：
 
 ```text
@@ -300,7 +300,7 @@ B3 只打 discovery（只读）:                通过        ← 限的是写�
 
 所以要跑批量之前先用 `tools/probes/probe_domains.py` 过一遍域名（它**不验证链接**，
 所以不会建任何账号 —— hark 的账号是在 `magic-link/verify` 那一步才建的）。
-已实测可用：`your-mail-domain`。
+已实测可用的自有域名写在 `.env` 里（不进仓库）—— 换域名后重跑一次本工具即可。
 
 ### 那次"4/4 失败"到底是什么（重要）
 
@@ -312,7 +312,7 @@ B3 只打 discovery（只读）:                通过        ← 限的是写�
 | `account-discovery`（同一出口 IP、同一时刻） | **200** |
 | `signup-age`（同上） | **200** |
 | `sign-in/magic-link`（同上） | **500**，`Content-Type: text/plain`，**空 body** |
-| 换邮箱域名（`@gmail.com` / `@another-domain` / 全新 `@your-mail-domain`） | 全部 **500** |
+| 换邮箱域名（公共邮箱 / 另一个自有域名 / 全新地址） | 全部 **500** |
 | 已有账号（`exists:true`）的 magic-link | **500** |
 | 同一时段走本地代理出口 | **500**（⚠ 见下） |
 | 30 分钟后重测 | **仍然 500**（持续，不是瞬时抖动） |
@@ -334,8 +334,9 @@ B3 只打 discovery（只读）:                通过        ← 限的是写�
 
 * 注册申请的限速已改成**按出口的滑动窗口**（`HR_REGISTER_MAX_PER_WINDOW=4` /
   `HR_REGISTER_WINDOW_S=60`）—— **实测值**，取代了旧的“每进程全局最小间隔”；
-* `HR_REG_QUOTA_MAX`（本地窗口上限）默认 **20** —— **没有服务端证据时的猜测**，
-  只用来防"手滑跑 500 个"，**不声称**它等于服务端上限；
+* `HR_REG_QUOTA_MAX`（本地窗口上限）默认 **50** —— 它是**爆炸半径上限**，
+  不是服务端配额（真正的限流是上面那两个按出口的窗口）；
+  旧默认 20 被现实跨过（一天成功 53 个），已上调；
 * 报告里对 5xx 的措辞是"network（可重试）"，不会说成"被封"。
 
 > 参照：Intern-Register-Tool 那边的 `REG_QUOTA_MAX=40` 是**撞墙撞出来的**，
@@ -347,7 +348,7 @@ B3 只打 discovery（只读）:                通过        ← 限的是写�
 `tools/ops/cf_service_doctor.py` 的输出：
 
 ```text
-Worker worker-name：modified_on=2026-09-26T13:12:09Z script_tag=ff3eb35c…
+Worker <worker-name>：modified_on=2026-09-26T13:12:09Z script_tag=ff3eb35c…
 部署历史：最近部署 2026-09-26T13:12:07Z version_id=734c71ea…（共 10 次，无回滚）
 D1：name=temp-email-db size=3,813,376
 D1 用量（近 7 天，rows_read / rows_written）
@@ -426,5 +427,5 @@ D1 用量（近 7 天，rows_read / rows_written）
 * **不逆向混淆 JS**：整条链路都是标准 JSON API，没有验证码、没有 WAF 解盾
   （对比 Intern-Register-Tool 必须用真浏览器解阿里云验证码）。
   所以本项目**零浏览器、零 playwright 依赖**。
-* **不做批量刷取**：本地配额闸门（`HR_REG_QUOTA_MAX`）默认就拦在 20/24h，
+* **不做批量刷取**：本地配额闸门（`HR_REG_QUOTA_MAX`）默认拦在 50/24h，
   要放开得**显式**加 `--ignore-quota`。

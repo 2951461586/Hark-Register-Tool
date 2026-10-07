@@ -3,7 +3,7 @@
 
 为什么需要它（实测踩到）
 ======================
-`another-domain` 在 Worker 的 `DOMAINS` 列表里、邮箱也能建出来，
+有一个自有域名在 Worker 的 `DOMAINS` 列表里、邮箱也能建出来，
 但 hark 的 magic link **从来没到**。而失败长这样：
 
     等 120s 没等到 magic link 邮件（打了 116 次收信接口）
@@ -28,7 +28,7 @@
 用法
 ====
     python tools/probes/probe_domains.py
-    python tools/probes/probe_domains.py --domains your-mail-domain,another-domain --wait 40
+    python tools/probes/probe_domains.py --domains a.example,b.example --wait 40
     python tools/probes/probe_domains.py --json state/domain_probe.json
 
 退出码：0 = 全部可用；1 = 有域名收不到信；2 = 一个都没配
@@ -48,26 +48,30 @@ from common import config  # noqa: E402
 from src.hark import HarkClient, HarkError  # noqa: E402
 from src.tempmail import TempMailClient, now_ms  # noqa: E402
 
-# Worker 侧 `/api/domains` 会给出权威清单；这里只作为"拿不到时的兜底"。
-FALLBACK = ["your-mail-domain"]
+# 🔴 **刻意没有兜底域名**。早前版本写了个硬编码的自有域名当 FALLBACK ——
+#    那是 🟠 基础设施标识（不该进仓库，见 docs/security-conventions.md），
+#    而且行为上也是错的：Worker 拿不到域名时它会**默默去探一个写死的域名**，
+#    得到一份看起来正常、实际与你当前配置无关的报告。
+#    现在的做法是**大声报错**，让人显式给 `--domains`。
 
 
 def worker_domains() -> list:
-    """问 Worker 它认哪些域名（`GET /api/domains`）。拿不到就用兜底。"""
+    """问 Worker 它认哪些域名（`GET /api/domains`）。拿不到就抛。"""
     import requests
 
-    try:
-        s = requests.Session()
-        s.trust_env = False
-        r = s.get(
-            f"{config.WORKER_BASE.rstrip('/')}/api/domains",
-            headers={"User-Agent": config.USER_AGENT, "Accept": "application/json"},
-            timeout=20,
+    url = f"{config.WORKER_BASE.rstrip('/')}/api/domains"
+    s = requests.Session()
+    s.trust_env = False
+    r = s.get(url, headers={"User-Agent": config.USER_AGENT, "Accept": "application/json"}, timeout=20)
+    data = r.json()
+    domains = list(data.get("domains") or [])
+    if not domains:
+        raise RuntimeError(
+            f"Worker {url} 没有返回任何域名。\n"
+            f"  修法：① 确认 HR_WORKER_BASE / HR_WORKER_ADMIN_TOKEN 是对的；\n"
+            f"        ② 或者用 --domains 显式指定要探测的域名。"
         )
-        data = r.json()
-        return list(data.get("domains") or []) or FALLBACK
-    except Exception:  # noqa: BLE001
-        return FALLBACK
+    return domains
 
 
 def probe_domain(domain: str, wait: float) -> dict:

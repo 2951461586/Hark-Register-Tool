@@ -37,9 +37,9 @@ python run.py --quiet                  # 只输出汇总
 |---|---|---|
 | `HR_WORKER_BASE` | ✅ | CF Worker 地址，如 `https://<worker>.<sub>.workers.dev` |
 | `HR_WORKER_ADMIN_TOKEN` | ✅ | Worker 的 Admin Token |
-| `HR_WORKER_DOMAIN` | ✅ | 收信域名（实测 `your-mail-domain` 直接过，hark **没有域名门**） |
+| `HR_WORKER_DOMAIN` | ✅ | 收信域名（实测**自有域名直接过**，hark 没有域名门） |
 | `HR_BIRTHDAY` | — | 默认 `1995-01-01`。🔴 服务端要求**满 18**，否则要绑卡 |
-| `HR_REG_QUOTA_MAX` / `HR_REG_QUOTA_WINDOW_H` | — | 本地配额闸门（默认 20 / 24h） |
+| `HR_REG_QUOTA_MAX` / `HR_REG_QUOTA_WINDOW_H` | — | **爆炸半径上限**（默认 50 / 24h）：真正的限流是按出口的滑动窗口，这个只防“手滑跑 500 个” |
 | `HR_REGISTER_MAX_PER_WINDOW` / `HR_REGISTER_WINDOW_S` | — | **按出口**的注册申请限速（默认 4 次 / 60s，**实测**：magic-link 约 5 次/分/IP） |
 | `HR_LOGIN_MAX_PER_WINDOW` / `HR_LOGIN_WINDOW_S` | — | **按出口**的登录限速（默认 3 次 / 10s，实测） |
 | `HR_PROXY` | — | 可选出口代理（`host:port:user:pass`） |
@@ -82,7 +82,7 @@ Worker 版本与部署历史（标出回滚）、D1 的 `rows_read`/`rows_writte
 > 本地 Clash 的混合端口对外往往仍是同一个 IP（实测过）。
 
 **`probe_domains.py`** 回答"哪个收信域名真能收到 hark 的信"。
-`another-domain` 在 Worker 的 `DOMAINS` 里、邮箱也建得出来，但 hark 的 magic link
+有一个自有域名在 Worker 的 `DOMAINS` 里、邮箱也建得出来，但 hark 的 magic link
 **从来没到** —— 每个账号白等 **120s** 的收信超时。本工具把那次 120s 变成一次
 35s 的对照实验，而且**不验证链接**（hark 的账号在 verify 那一步才建），所以零副作用。
 
@@ -243,14 +243,14 @@ ledger/latest.json                                     ← **本批结果**（�
 ══════════════════════════════════════════════════════════════
 结果：成功 1 / 1（失败 0，跳过 0）｜墙钟 12.4s｜4 路并发 → 12.45s/账号
 ──────────────────────────────────────────────────────────────
-  ✓ oai…@your-mail-domain    plan=free｜8000K tokens/天
+  ✓ oai…@<your-mail-domain>    plan=free｜8000K tokens/天
 ──────────────────────────────────────────────────────────────
 阶段耗时（中位 / 最大）
   mailbox        2.4s /     2.4s
   register       3.4s /     3.4s
   activate       4.0s /     4.0s   ← 其中等信 中位 285ms
   ...
-最慢账号（决定本批总时长）：oai…@your-mail-domain
+最慢账号（决定本批总时长）：oai…@<your-mail-domain>
   mailbox=2.4s register=3.4s mail_wait=285ms verify=3.7s ...
 ```
 
@@ -283,7 +283,7 @@ ledger/latest.json                                     ← **本批结果**（�
   台账的 `proxy_rotated`，`proxy` 记**最终**出口。
   那 ~17s 是白等的。Intern-Register-Tool 的 `ExitRotationNeeded` 就是这个思路，
   这是本项目下一个该改的地方。
-* **`another-domain` 收不到 hark 的信**（实测 120s 超时 × 2）：它在 Worker 的
+* **自有域名里有的收不到 hark 的信**（实测 120s 超时 × 2）：它在 Worker 的
   `DOMAINS` 里、邮箱也建得出来，但 magic link 从来没到。跑批量前先用
   `tools/probes/probe_domains.py` 过一遍域名（零副作用：不验证链接就不会建号）。
 * **不要并行跑多个 `run.py` 进程**：登录限流是服务端按 IP 计的，而我们的滑动窗口
@@ -295,8 +295,9 @@ ledger/latest.json                                     ← **本批结果**（�
   而 discovery/signup-age 照常 200；30 分钟后仍 500），**不是限流** ——
   排查过程与**一个没有排除干净的可能**（出口维度）记在
   [`docs/protocol.md`](docs/protocol.md)「限流与配额：实测」。
-  所以 `HR_REG_QUOTA_MAX=20` 仍是**保守值/猜测**，不是实测结论
-  （限速那两个已经换成实测值了：注册申请 4/60s、登录 3/10s，都按出口）。
+  ⚠ `HR_REG_QUOTA_MAX` 已从 20 改成 **50**：它的角色被重新定位成“爆炸半径上限”
+  （真正的限流是按出口的滑动窗口，两个都是实测值）—— 旧的 20 被现实跨过
+  （2026-10-08 一天成功 53 个），而**总是被跨过的闸门等于不存在**。
 * **单账号关键路径约 6.3s**（10 批实测的**中位**）：`mailbox` 0.81s +
   `register`（三个写请求）1.30s + `activate` 2.25s（其中等信 ~0.3–1.3s、
   `verify` 1.0–3.7s）+ `password` 0.27s + `login` 0.81s + `app` 0.89s。

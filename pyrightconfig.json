@@ -1,6 +1,6 @@
 {
   "//": "本仓库的包名就叫 `src`（见 pyproject.toml 里那段说明：全库 20+ 处 `from src.xxx import`，改名是纯 churn）。",
-  "//2": "而 F:/epsoft/Cyber/ 下有三个兄弟项目都用了这个名字（Hark / Intern / FiimeOPC），它们各自也有 src/report.py 且签名不同。",
+  "//2": "而本仓库的父目录下有三个兄弟项目都用了这个名字，它们各自也有 src/report.py 且签名不同（绝对路径不写进仓库，见 docs/security-conventions.md）。",
   "//3": "于是静态分析可能把 run.py 的 `from src import report` 解析到**别人的** report.py，报出并不存在的参数错误。",
   "//4": "extraPaths 把本仓库根放在最前，强制 `src` 解析到这里的包。",
   "//5": "同时把 tools/ 的三个子目录也加进去 —— 它们各自是脚本的 import 根",

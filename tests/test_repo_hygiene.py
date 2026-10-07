@@ -11,6 +11,7 @@
    `selftest_check_leaks.py` 同一个做法。
 """
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -102,6 +103,85 @@ def test_no_credentials_in_repo_files():
     assert not hits, "凭据泄漏：\n  " + "\n  ".join(hits)
 
 
+# ── 🟠 基础设施标识 / 本机路径 ─────────────────────────────
+#
+# 这两条的判据写在 docs/security-conventions.md 的 §1 与 §5。它们是 2026-10-08
+# 那次审计的直接产物：当时 `git grep` 在**已提交的树**里找到 16 处收信域名、
+# 5 处另一个自有域名、1 个具体账号地址、2 处本机绝对路径。
+# 那些违规**不是**“忘了加 gitignore”，而是“在注释/文档/默认值里顺手写了真实值”。
+
+# 本机绝对路径（`F:/…`、`C:\…`）。判据取“盘符 + 分隔符 + 至少两段”，
+# 免得把 `ratio 3:1` 这类写法当路径。
+ABS_PATH_RE = re.compile(r"\b[A-Za-z]:[\\/][^\s\"'<>|*?]{2,}[\\/]")
+
+
+def _sensitive_values_from_env() -> list:
+    """从本地 `.env` **反推**“对你而言敏感的具体值”。
+
+    ⚠ CI 上没有 `.env`（它是 gitignored 的）⇒ 返回空 ⇒ 本闸门在 CI 上是**空转**。
+      这是**边界**不是缺陷：CI 无法知道什么值对你敏感。所以它**不能替代人工分类**，
+      只能在你本机跑测试时把“顺手写进去的真实值”当场拦下。
+      详见 `docs/security-conventions.md` §5。
+    """
+    from urllib.parse import urlparse
+
+    from common import config
+
+    out: list = []
+    if config.WORKER_DOMAIN:
+        out.append(("收信域名", config.WORKER_DOMAIN))
+    host = urlparse(config.WORKER_BASE or "").hostname or ""
+    if host:
+        out.append(("Worker 主机", host))
+        labels = host.split(".")
+        if len(labels) >= 2:
+            out.append(("Worker 名", labels[0]))
+            # workers.dev 的形态是 `<worker>.<账号子域>.workers.dev`，
+            # 账号子域在倒数第三层。
+            if labels[-2:] == ["workers", "dev"]:
+                out.append(("workers.dev 账号子域", labels[-3]))
+    return [(label, val) for label, val in out if val and len(val) >= 4]
+
+
+def test_no_infrastructure_identifiers_in_repo_files():
+    """🟠 标识不得出现在仓库里（值从本地 `.env` 读，见上面函数的说明）。"""
+    values = _sensitive_values_from_env()
+    if not values:
+        pytest.skip("本地没有 .env（CI 上必然如此）—— 这条闸门只能在本机生效")
+    hits = []
+    for p in iter_repo_files():
+        rel = p.relative_to(ROOT)
+        if rel in SCAN_ALLOWED_PATHS:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for label, val in values:
+            if val in text:
+                hits.append(f"{rel} 含{label}")
+    assert not hits, (
+        "基础设施标识泄漏（按 docs/security-conventions.md §1 应改为占位符）：\n  "
+        + "\n  ".join(sorted(set(hits)))
+    )
+
+
+def test_no_absolute_paths_in_repo_files():
+    """🟠 本机绝对路径不得入库（跨机器无意义，且暴露目录布局）。"""
+    hits = []
+    for p in iter_repo_files():
+        rel = p.relative_to(ROOT)
+        if rel in SCAN_ALLOWED_PATHS:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for m in ABS_PATH_RE.finditer(text):
+            hits.append(f"{rel}: {m.group(0)!r}")
+    assert not hits, "绝对路径入库：\n  " + "\n  ".join(sorted(set(hits))[:10])
+
+
 def test_credential_detector_actually_fires():
     """🔴 变异自检：闸门**真的**会拦吗？
 
@@ -168,7 +248,15 @@ def test_gitignore_actually_ignores_the_ledger(tmp_path):
 
 
 def test_docs_exist():
-    for rel in ("README.md", "docs/protocol.md", "docs/README.md", ".env.example"):
+    for rel in (
+        "README.md",
+        "docs/protocol.md",
+        "docs/README.md",
+        # ⚠ 这份文档本身要进闸门：它是 §5 那张“闸门清单”的宿主，
+        #   被删掉之后所有引用它的注释都会指向空气。
+        "docs/security-conventions.md",
+        ".env.example",
+    ):
         assert (ROOT / rel).is_file(), rel
 
 
