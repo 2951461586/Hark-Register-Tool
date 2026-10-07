@@ -1,0 +1,113 @@
+name: ci
+
+# 为什么要 CI（本地已经能跑 pytest 与 ruff）
+# =========================================
+# 因为"本地跑过了"**不是**一条能被别人复核的证据，而且它依赖人记得跑。
+# 本项目最在意的一类失败是**闸门在说假话**：一个只在有人记得时才执行的闸门，
+# 与没有闸门差别不大 —— 它照样会让"全绿"变成一个没人验证过的说法。
+#
+# 三个 job 的边界是**刻意的**（与 Intern-Register-Tool 同一套划分）：
+#
+#   lint   —— 只装 ruff。跑得快，失败指向明确。
+#   test   —— pytest，3.11 与 3.13 两个版本。
+#             🔴 必须显式装 `requests`：测试链上 `tests/test_pipeline.py`
+#                → `src.pipeline` → `src.hark` → `import requests`。
+#                漏装的表现是**收集期 ImportError**，而不是某条用例失败。
+#   hygiene —— 泄漏闸门（`tests/test_repo_hygiene.py` 里的那几条）**单独**跑一遍，
+#             并在这一 job 里**先做一次变异自检**：把一个假凭据写进一个临时文件，
+#             断言闸门**真的会红**。
+#             🔴 "CI 里跑了扫描" ≠ "扫描真的会拦"：一个恒 `exit 0` 的死检查
+#                也能让这一步变绿。自检才是"闸门有效"的证据。
+#
+# ⚠ 本仓库的包名就叫 `src`（见 pyproject.toml 的说明），而同一台机器上
+#   另有兄弟项目用同名包。CI 里只有一个仓库，不存在这个歧义。
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 版本范围与 pyproject.toml 的 `optional-dependencies.dev` 保持一致。
+      - name: 安装 ruff
+        run: pip install "ruff>=0.16,<0.17"
+
+      - name: ruff check
+        run: python -m ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 🔴 这份清单有**三处**必须同步，改一处就要改全：
+      #      1. 这里
+      #      2. `tests/test_repo_hygiene.py`
+      #         （`test_requirements_pin_requests_only`）
+      #      3. `pyproject.toml` 的 `dependencies` / `optional-dependencies.dev`
+      #    本项目的运行依赖**只有 requests 一个**（整链零浏览器），所以这条边界
+      #    很窄、也很好守 —— 那正是它值得被断言的原因。
+      - name: 安装测试依赖
+        run: pip install "pytest>=8" "requests>=2.31"
+
+      # ⚠ **不要在这里加 `-q`**：`pyproject.toml` 的 `addopts` 已经有一个 `-q`，
+      #    两个叠成 `-qq` 会把汇总行吞掉 —— 日志里只剩一串点，
+      #    看不到 `135 passed in 8.6s`。实测确认过（Intern 项目那边栽过）。
+      - name: pytest
+        run: python -m pytest
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装 pytest
+        run: pip install "pytest>=8" "requests>=2.31"
+
+      - name: 仓库卫生（凭据 / .gitignore / 文档齐备）
+        run: python -m pytest tests/test_repo_hygiene.py -v
+
+      # 🔴 变异自检：造一个含**假**凭据的文件，断言闸门会红。
+      #    用一个只有本 job 知道的随机串，避免"恰好与真凭据同形"。
+      #    ⚠ 假串要拼出来，别在 workflow 里写成完整形态 —— 否则这个文件本身
+      #      就会被别的扫描器当成泄漏。
+      - name: 变异自检（闸门真的会拦吗）
+        run: |
+          set -e
+          TOKEN=$(python -c 'import secrets;print(secrets.token_hex(20))')
+          NEEDLE="cfat_${TOKEN}"
+          printf 'leaked = "%s"\n' "$NEEDLE" > tests/_leak_canary.py
+          if python -m pytest tests/test_repo_hygiene.py -q; then
+            echo "::error::闸门没有拦住注入的假凭据 —— 它是个死检查"
+            exit 1
+          fi
+          echo "OK：闸门拦住了注入的假凭据"
+          rm -f tests/_leak_canary.py
+
+      # 兜底：万一上面失败得太早，别把 canary 留在工作区里（不影响 CI，但会误导本地）
+      - name: 清理 canary
+        if: always()
+        run: rm -f tests/_leak_canary.py

@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hark-register-tool"
+version = "0.1.0"
+description = "Hark 端到端注册全链路（CF Worker 域名邮箱 + magic link + 密码登录）"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "requests>=2.31",
+]
+
+# 开发依赖与运行依赖分开：整条链路**零浏览器**（不需要 playwright），
+# 所以运行依赖只有 requests 一个 —— 这是与 Intern-Register-Tool 最大的结构差异。
+#
+# 🔴 ruff 锁到次版本：它随次版本**新增规则**，不锁的话某天 CI 会因为
+#    "上游发新版"而红，跟当次改动毫无关系（且这种红很容易被当成噪声忽略）。
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.16,<0.17",
+]
+
+# ⚠ `packages` 是**显式列表**，不会自动发现子包。新增顶层包必须回到这里加，
+#    否则构建出来的 wheel 会**缺整个包**，而且不报错。
+[tool.setuptools]
+packages = ["src", "common"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# 🔴 `-rs` 让"跳过的用例"把**原因**打出来；`-q` 只允许在这里出现一次
+#    （命令行再写一个会叠成 `-qq`，pytest 会把最后的汇总行吞掉）。
+addopts = "-q --strict-markers -rs"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["ledger", "state", "__pycache__"]
+
+[tool.ruff.lint]
+# 与 Intern-Register-Tool 同一套取舍：注释密度与函数长度是有意为之，
+# 所以**不**开 D（docstring）/ ANN（标注）/ C90（复杂度）——
+# 用它们刷出来的告警只会被 `# noqa` 淹没，最后连真问题一起被忽略。
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    # 注释里大量是中文长句 + 实测数据表，折行会把可读性弄得更差。
+    "E501",
+    # 函数调用作默认值：本项目用它做"可注入的默认实现"（如 log=print）。
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# tools/ 下的脚本有**结构性**的 E402：`from _path import ROOT` 必须排在
+# `from src ...` 之前（副作用导入：把仓库根加进 sys.path 并加载 .env）。
+"tools/**/*.py" = ["E402"]
+"tools/_bootstrap.py" = ["F401"]
+"tools/**/_path.py" = ["F401"]

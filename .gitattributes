@@ -1,0 +1,17 @@
+# 行尾统一成 LF。
+#
+# 🔴 为什么需要它：本机是 Windows，`core.autocrlf` 默认 `true`。没有这份声明时，
+#    `git add` 会对**每一个**文件警告 “LF will be replaced by CRLF”，
+#    而真正的后果是**跨机器抖动**：Linux CI 检出得到 LF、本机检出得到 CRLF，
+#    于是同一份文件在两边的字节不同 —— 对一份大量依赖“逐字节对比”的工程
+#    （台账快照、部署产物比对、`pyproject.toml` 里的行数断言）来说，
+#    这种抖动会变成**看起来像内容变更的假差异**。
+#
+# `text=auto` 让 git 自己判断是不是文本；`eol=lf` 强制检出也是 LF。
+* text=auto eol=lf
+
+# 二进制/不该做行尾转换的东西（显式声明，别让启发式去猜）。
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.har binary
