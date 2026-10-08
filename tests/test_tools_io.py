@@ -529,8 +529,15 @@ def test_doctor_worker_uses_the_services_endpoint(monkeypatch):
         seen.append(url)
         return (
             200,
-            {"success": True, "result": {"default_environment": {
-                "modified_on": "2026-09-26T13:12:09Z", "script_tag": "ff3eb35ce97c448d"}}},
+            {
+                "success": True,
+                "result": {
+                    "default_environment": {
+                        "modified_on": "2026-09-26T13:12:09Z",
+                        "script_tag": "ff3eb35ce97c448d",
+                    }
+                },
+            },
             "",
         )
 
@@ -546,24 +553,61 @@ def test_doctor_deployments_flags_a_rollback(monkeypatch):
 
     这条不在任何客户端错误里，而 Worker 行为突变时它是第一个该看的证据。
     """
+
     def dep(vid, when):
         return {"created_on": when, "versions": [{"version_id": vid, "percentage": 100}]}
 
     # 回滚：最新的 vid 与更早的一次相同
-    _patch_get(monkeypatch, {"deployments": (200, {"success": True, "result": {
-        "deployments": [dep("v1", "2026-10-08"), dep("v2", "2026-10-07"), dep("v1", "2026-10-06")]}}, "")})
+    _patch_get(
+        monkeypatch,
+        {
+            "deployments": (
+                200,
+                {
+                    "success": True,
+                    "result": {
+                        "deployments": [
+                            dep("v1", "2026-10-08"),
+                            dep("v2", "2026-10-07"),
+                            dep("v1", "2026-10-06"),
+                        ]
+                    },
+                },
+                "",
+            )
+        },
+    )
     ok, msg = cf_service_doctor.probe_deployments("t", "acct", "w")
     assert ok and "回滚" in msg, msg
 
     # 正常：每个 vid 都不同
-    _patch_get(monkeypatch, {"deployments": (200, {"success": True, "result": {
-        "deployments": [dep("v3", "2026-10-08"), dep("v2", "2026-10-07"), dep("v1", "2026-10-06")]}}, "")})
+    _patch_get(
+        monkeypatch,
+        {
+            "deployments": (
+                200,
+                {
+                    "success": True,
+                    "result": {
+                        "deployments": [
+                            dep("v3", "2026-10-08"),
+                            dep("v2", "2026-10-07"),
+                            dep("v1", "2026-10-06"),
+                        ]
+                    },
+                },
+                "",
+            )
+        },
+    )
     ok, msg = cf_service_doctor.probe_deployments("t", "acct", "w")
     assert ok and "回滚" not in msg, msg
 
 
 def test_doctor_deployments_handles_empty_history(monkeypatch):
-    _patch_get(monkeypatch, {"deployments": (200, {"success": True, "result": {"deployments": []}}, "")})
+    _patch_get(
+        monkeypatch, {"deployments": (200, {"success": True, "result": {"deployments": []}}, "")}
+    )
     ok, msg = cf_service_doctor.probe_deployments("t", "acct", "w")
     assert not ok and "没有部署记录" in msg
 
@@ -575,17 +619,38 @@ def test_doctor_d1_usage_parses_rows_and_reports_graphql_errors(monkeypatch):
 
     def fake_post(url, token, payload, timeout=25.0):
         sent.update(payload["variables"])
-        return (200, {"data": {"viewer": {"accounts": [{"d1AnalyticsAdaptiveGroups": [
-            {"dimensions": {"date": "2026-10-07"}, "sum": {"rowsRead": 12594, "rowsWritten": 1393}}]}]}}}, "")
+        return (
+            200,
+            {
+                "data": {
+                    "viewer": {
+                        "accounts": [
+                            {
+                                "d1AnalyticsAdaptiveGroups": [
+                                    {
+                                        "dimensions": {"date": "2026-10-07"},
+                                        "sum": {"rowsRead": 12594, "rowsWritten": 1393},
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            },
+            "",
+        )
 
     monkeypatch.setattr(cf_service_doctor, "_post_json", fake_post)
     ok, rows, msg = cf_service_doctor.probe_d1_usage("t", "acct", days=3)
     assert ok and rows == [{"date": "2026-10-07", "rowsRead": 12594, "rowsWritten": 1393}]
     for key in ("since", "until"):
-        assert len(sent[key]) == 10 and sent[key][4] == "-", f"{key}={sent[key]!r} 应当是 YYYY-MM-DD"
+        assert len(sent[key]) == 10 and sent[key][4] == "-", (
+            f"{key}={sent[key]!r} 应当是 YYYY-MM-DD"
+        )
 
     monkeypatch.setattr(
-        cf_service_doctor, "_post_json",
+        cf_service_doctor,
+        "_post_json",
         lambda *a, **k: (200, {"errors": [{"message": "date format should be '2006-01-02'"}]}, ""),
     )
     ok, rows, msg = cf_service_doctor.probe_d1_usage("t", "acct")
@@ -655,12 +720,12 @@ def test_probe_magic_link_verdicts(monkeypatch):
     monkeypatch.setattr(probe_magic_link.time, "sleep", lambda s: None)
     cases = [
         # (控制组, 目标组, 期望退出码)
-        ((True, "ok"), [(True, 200, "200")], 0),          # 都通
+        ((True, "ok"), [(True, 200, "200")], 0),  # 都通
         ((True, "ok"), [(False, 500, "HarkNetwork")], 1),  # 端点级故障
         # 出口维度（混合）：`--proxy a,b` 会探 **3** 个出口（direct + a + b），
         # 所以预置的目标结果也必须是 3 个（少一个就是 StopIteration —— 实测踩到）。
         ((True, "ok"), [(True, 200, ""), (False, 429, "x"), (False, 429, "x")], 3),
-        ((False, "控制组也挂了"), [(True, 200, "")], 2),    # 控制组失败
+        ((False, "控制组也挂了"), [(True, 200, "")], 2),  # 控制组失败
     ]
     for control, targets, want in cases:
         monkeypatch.setattr(probe_magic_link, "probe_controls", lambda p, _c=control: _c)
@@ -701,8 +766,13 @@ def test_trip_quota_returns_the_hitting_round(monkeypatch):
         calls["n"] += 1
         hit = calls["n"] >= 3
         return [
-            {"call": "magic-link", "status": 429 if hit else 200, "ms": 1,
-             "error": "QUOTA" if hit else "", **({"quota": True} if hit else {})}
+            {
+                "call": "magic-link",
+                "status": 429 if hit else 200,
+                "ms": 1,
+                "error": "QUOTA" if hit else "",
+                **({"quota": True} if hit else {}),
+            }
         ]
 
     monkeypatch.setattr(probe_register_limit, "_one_round", fake_round)
@@ -720,8 +790,13 @@ def test_measure_window_reports_recovery_and_runs_the_control(monkeypatch):
         # 1 成功；2 触顶；3/4 仍 429；5 通过；6 对照再触顶；7 对照探测通过
         hit = len(seq) in (2, 3, 4, 6)
         return [
-            {"call": "magic-link", "status": 429 if hit else 200, "ms": 1,
-             "error": "QUOTA" if hit else "", **({"quota": True} if hit else {})}
+            {
+                "call": "magic-link",
+                "status": 429 if hit else 200,
+                "ms": 1,
+                "error": "QUOTA" if hit else "",
+                **({"quota": True} if hit else {}),
+            }
         ]
 
     monkeypatch.setattr(probe_register_limit, "_one_round", fake_round)
@@ -737,7 +812,8 @@ def test_measure_window_reports_recovery_and_runs_the_control(monkeypatch):
 def test_measure_window_gives_up_when_it_never_trips(monkeypatch):
     monkeypatch.setattr(probe_register_limit.time, "sleep", lambda s: None)
     monkeypatch.setattr(
-        probe_register_limit, "_one_round",
+        probe_register_limit,
+        "_one_round",
         lambda *a, **k: [{"call": "magic-link", "status": 200, "ms": 1, "error": ""}],
     )
     win = probe_register_limit.measure_window(
@@ -748,7 +824,8 @@ def test_measure_window_gives_up_when_it_never_trips(monkeypatch):
 
 def test_probe_register_limit_exit_1_when_no_quota(monkeypatch):
     monkeypatch.setattr(
-        probe_register_limit, "_one_round",
+        probe_register_limit,
+        "_one_round",
         lambda *a, **k: [{"call": "magic-link", "status": 200, "ms": 1, "error": ""}],
     )
     monkeypatch.setattr(probe_register_limit.config, "WORKER_DOMAIN", "main.test")
@@ -758,6 +835,5 @@ def test_probe_register_limit_exit_1_when_no_quota(monkeypatch):
 
 def test_recover_main_exit_2_when_nothing_to_recover(write_ledger):
     """没有待补的账号时返回 2（而不是“成功且什么都没做”）。"""
-    write_ledger([{"email": "a@example.com", "status": "success",
-                   "stages": {"activate": "ok"}}])
+    write_ledger([{"email": "a@example.com", "status": "success", "stages": {"activate": "ok"}}])
     assert recover_accounts.main([]) == 2
