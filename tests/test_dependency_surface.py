@@ -68,6 +68,7 @@ def _tool_module_names() -> set:
     """
     return {p.stem for p in (ROOT / "tools").rglob("*.py")}
 
+
 # 这些模块是"便宜层"：不碰网络、只依赖 stdlib + 本仓库。
 # 🔴 为什么单独钉住它们：`tests/test_report.py` / `test_ledger_merge.py` 只 import
 #    这一层，于是那几十条用例能在**不装 requests** 的环境里跑。一旦有人往

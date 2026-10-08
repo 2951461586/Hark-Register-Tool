@@ -171,7 +171,9 @@ def measure_window(
             r = _one_round(client, mail, domain, birthday)
             ok = not any(c.get("quota") for c in r)
             control = {"tripped": True, "waited_s": wait, "passed": ok}
-            log(f"  {'通过 ✅ 与第一段自洽' if ok else '仍 429 ⇒ 失败探测也会推窗口，真值 > 第一段'}")
+            log(
+                f"  {'通过 ✅ 与第一段自洽' if ok else '仍 429 ⇒ 失败探测也会推窗口，真值 > 第一段'}"
+            )
 
     return {
         "tripped": True,
@@ -190,7 +192,9 @@ def main(argv=None) -> int:
         "--measure-window", action="store_true", help="改测**窗口长度**（不再做 B1/B2/B3 定性）"
     )
     ap.add_argument("--poll", type=float, default=10.0, help="测窗口时的探测粒度秒数（默认 10）")
-    ap.add_argument("--interval", type=float, default=0.0, help="轮之间的间隔秒数（默认 0 = 尽快打）")
+    ap.add_argument(
+        "--interval", type=float, default=0.0, help="轮之间的间隔秒数（默认 0 = 尽快打）"
+    )
     ap.add_argument("--domain", default=None, help="主域名（默认 HR_WORKER_DOMAIN）")
     ap.add_argument("--alt-domain", default=None, help="对照用的另一个域名（默认问 Worker 要）")
     ap.add_argument("--json", default=None, help="把报告写成 JSON（相对仓库根）")
